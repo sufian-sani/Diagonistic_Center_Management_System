@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+    font-family: Outfit;
+}
+
+.active hr {
+    @apply block
+}
+
+@media (max-width:740px) {
+    .active  p{
+       @apply text-white bg-primary
+    }
+}
+
+::-webkit-scrollbar {
+    @apply hidden
+}
+/*home page header section*/
+.home-banner{
+    background-image: url('./assets/7ae13ef83374ce2f3d2170e866635eeb.png');
+    background-size: cover;
+    background-position: center;
+}
+.banner-button{
+    background: #A6F079;
+    box-shadow: 5px 5px 5px rgba(0, 0, 0, 0.6);
+}
