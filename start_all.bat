@@ -1,0 +1,16 @@
+@echo off
+echo Starting Diagnostic Management Platform...
+
+echo Starting MongoDB Database...
+start cmd /k ""C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe" --dbpath "%~dp0db""
+
+echo Starting Backend API Server...
+start cmd /k "cd backend && npm run server"
+
+echo Starting Frontend (Patient Portal)...
+start cmd /k "cd frontend && npm run dev"
+
+echo Starting Admin Portal (Doctor/Staff)...
+start cmd /k "cd admin && npm run dev"
+
+echo All services are starting in separate windows.
