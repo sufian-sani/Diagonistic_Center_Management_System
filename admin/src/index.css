@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*{
+    font-family: 'Inter', sans-serif;
+}
+
+::-webkit-scrollbar{
+    display: none;
+}
+
+/* Modern Glassmorphism Utilities */
+.glass-panel {
+    @apply bg-white/70 backdrop-blur-md border border-white/40 shadow-xl;
+}
+
+.glass-card {
+    @apply bg-white/50 backdrop-blur-sm border border-white/20 shadow-lg hover:shadow-xl transition-all duration-300;
+}
+
+.text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
+}
