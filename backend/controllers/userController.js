@@ -1,26 +1,34 @@
 import jwt from "jsonwebtoken";
+import { OAuth2Client } from 'google-auth-library';
 import bcrypt from "bcrypt";
 import validator from "validator";
 import userModel from "../models/userModel.js";
 import doctorModel from "../models/doctorModel.js";
+import staffModel from "../models/staffModel.js";
 import appointmentModel from "../models/appointmentModel.js";
 import { v2 as cloudinary } from 'cloudinary'
-import stripe from "stripe";
-import razorpay from 'razorpay';
 import axios from 'axios'
+import PaymentGateway from "../utils/PaymentGateway.js";
 
-// Gateway Initialize
-const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
-const razorpayInstance = new razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-})
+// Gateway Singleton instance helper
+const paymentGateway = PaymentGateway.getInstance();
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // API to register user
 const registerUser = async (req, res) => {
 
     try {
         const { name, email, password } = req.body;
+
+        // Role Isolation Check: Prevent Staff/Admin from registering as Patients
+        const isDoctor = await doctorModel.findOne({ email });
+        const isStaff = await staffModel.findOne({ email });
+        const isAdmin = email === process.env.ADMIN_EMAIL;
+
+        if (isDoctor || isStaff || isAdmin) {
+            return res.json({ success: false, message: 'This email is reserved for Staff/Admin access. Please use a different email.' })
+        }
 
         // checking for all data to register user
         if (!name || !email || !password) {
@@ -85,6 +93,49 @@ const loginUser = async (req, res) => {
     }
 }
 
+// API to login with Google
+const googleLogin = async (req, res) => {
+    try {
+        const { token } = req.body;
+        const ticket = await client.verifyIdToken({
+            idToken: token,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+
+        const { name, email, picture } = ticket.getPayload();
+
+        // Role Isolation Check: Prevent Staff/Admin from logging in as Patients
+        const isDoctor = await doctorModel.findOne({ email });
+        const isStaff = await staffModel.findOne({ email });
+        const isAdmin = email === process.env.ADMIN_EMAIL;
+
+        if (isDoctor || isStaff || isAdmin) {
+            return res.json({ success: false, message: 'This email is registered for Staff/Admin. Patient access denied.' })
+        }
+
+        let user = await userModel.findOne({ email });
+
+        if (!user) {
+            // Create new user if not exists
+            const userData = {
+                name,
+                email,
+                password: await bcrypt.hash(Math.random().toString(36).slice(-8), 10),
+                image: picture
+            }
+            user = new userModel(userData);
+            await user.save();
+        }
+
+        const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+        res.json({ success: true, token: jwtToken });
+
+    } catch (error) {
+        console.log(error);
+        res.json({ success: false, message: error.message });
+    }
+}
+
 // API to get user profile data
 const getProfile = async (req, res) => {
 
@@ -136,7 +187,7 @@ const bookAppointment = async (req, res) => {
 
     try {
 
-        const { userId, docId, slotDate, slotTime } = req.body
+        const { userId, docId, slotDate, slotTime, isTeleconsultation } = req.body
         const docData = await doctorModel.findById(docId).select("-password")
 
         if (!docData.available) {
@@ -162,12 +213,16 @@ const bookAppointment = async (req, res) => {
 
         delete docData.slots_booked
 
+        // Apply 30% discount if it's an online consultation
+        const finalAmount = isTeleconsultation ? Math.floor(docData.fees * 0.7) : docData.fees;
+
         const appointmentData = {
             userId,
             docId,
             userData,
             docData,
-            amount: docData.fees,
+            amount: finalAmount,
+            isTeleconsultation: isTeleconsultation || false,
             slotTime,
             slotDate,
             date: Date.now()
@@ -226,6 +281,11 @@ const listAppointment = async (req, res) => {
     try {
 
         const { userId } = req.body
+        
+        if (!userId) {
+            return res.json({ success: false, message: 'User ID not found' })
+        }
+
         const appointments = await appointmentModel.find({ userId })
 
         res.json({ success: true, appointments })
@@ -255,7 +315,7 @@ const paymentRazorpay = async (req, res) => {
         }
 
         // creation of an order
-        const order = await razorpayInstance.orders.create(options)
+        const order = await paymentGateway.getRazorpay().orders.create(options)
 
         res.json({ success: true, order })
 
@@ -269,7 +329,7 @@ const paymentRazorpay = async (req, res) => {
 const verifyRazorpay = async (req, res) => {
     try {
         const { razorpay_order_id } = req.body
-        const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
+        const orderInfo = await paymentGateway.getRazorpay().orders.fetch(razorpay_order_id)
 
         if (orderInfo.status === 'paid') {
             await appointmentModel.findByIdAndUpdate(orderInfo.receipt, { payment: true })
@@ -310,7 +370,7 @@ const paymentStripe = async (req, res) => {
             quantity: 1
         }]
 
-        const session = await stripeInstance.checkout.sessions.create({
+        const session = await paymentGateway.getStripe().checkout.sessions.create({
             success_url: `${origin}/verify?success=true&appointmentId=${appointmentData._id}`,
             cancel_url: `${origin}/verify?success=false&appointmentId=${appointmentData._id}`,
             line_items: line_items,
@@ -346,7 +406,7 @@ const verifyStripe = async (req, res) => {
 
 //aamarpay setup
 //aamarpay payment
-const aamarpaySandboxUrl = 'https://​sandbox​.aamarpay.com/jsonpost.php';
+const aamarpaySandboxUrl = 'https://sandbox.aamarpay.com/jsonpost.php';
 const callbackUrl = 'http://localhost:5000/callback';
 
 const paymentAamarpay = async (req, res) => {
@@ -358,14 +418,7 @@ const paymentAamarpay = async (req, res) => {
             return res.json({ success: false, message: 'Appointment Cancelled or not found' })
         }
 
-        // creating options for razorpay payment
-        // const options = {
-        //     amount: appointmentData.amount,
-        //     receipt: appointmentId,
-        // }
-        // console.log(options)
         const cusDetails = await userModel.findById(req.body.userId)
-        // console.log(cusDetails)
 
         const payload = {
             store_id: 'aamarpaytest',
@@ -384,8 +437,6 @@ const paymentAamarpay = async (req, res) => {
             type: "json"
         };
 
-        // creation of an order
-        // const order = await aamarpayInstance.orders.create(options)
         const responseData = await axios.post(aamarpaySandboxUrl, payload, {
             headers: { 'Content-Type': 'application/json' },
         });
@@ -404,7 +455,6 @@ const paymentSuccess = async (req, res) => {
     await appointmentModel.findByIdAndUpdate(appointmentId, { payment: true })
     const successUrl = 'http://localhost:5173/success';
     res.redirect(successUrl);
-    // res.json({ success: true, redirectTo: successUrl });
 }
 // paymentFail
 const paymentFail = async (req, res) => {
@@ -433,4 +483,5 @@ export {
     paymentSuccess,
     paymentFail,
     paymentCancel,
+    googleLogin,
 }

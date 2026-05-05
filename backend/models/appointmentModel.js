@@ -12,7 +12,12 @@ const appointmentSchema = new mongoose.Schema({
     cancelled: { type: Boolean, default: false },
     payment: { type: Boolean, default: false },
     isCompleted: { type: Boolean, default: false },
+    hasArrived: { type: Boolean, default: false }, // Tracks if the patient has physically checked in
     note: { type: String, default: '' }, // New field for notes
+    isTeleconsultation: { type: Boolean, default: false },
+    videoRoomId: { type: String, default: '' },
+    sessionNotes: { type: String, default: '' },
+    aiPrescriptionData: { type: Object, default: null }
 })
 
 const appointmentModel = mongoose.models.appointment || mongoose.model("appointment", appointmentSchema)
